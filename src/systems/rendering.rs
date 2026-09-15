@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use ggez::{
     Context,
@@ -6,6 +6,7 @@ use ggez::{
 };
 use glam::Vec2;
 use hecs::{Entity, World};
+use itertools::Itertools;
 
 use crate::components::*;
 use crate::constants::*;
@@ -15,13 +16,9 @@ pub fn run_rendering(world: &World, context: &mut Context) {
     let mut canvas =
         graphics::Canvas::from_frame(context, graphics::Color::from([0.95, 0.95, 0.95, 1.0]));
 
-    // 渲染 FPS
-    let fps = format!("FPS: {:.0}", context.time.fps());
-    draw_text(&mut canvas, &fps, 525.0, 120.0);
-
     // 获取时间
     let mut query = world.query::<&Time>();
-let time = query.iter().next().unwrap().1;
+    let time = query.iter().next().unwrap().1;
 
     // 遍历所有位置与可渲染对象的组合，加载图像
     // 并将其绘制在指定位置。
@@ -29,18 +26,45 @@ let time = query.iter().next().unwrap().1;
     let mut rendering_data: Vec<(Entity, (&Position, &Renderable))> = query.into_iter().collect();
     rendering_data.sort_by_key(|&k| k.1.0.z);
 
+    // ANCHOR: rendering_batches
+    let mut rendering_batches: HashMap<u8, HashMap<String, Vec<DrawParam>>> = HashMap::new();
+
     // 遍历所有位置与可渲染对象的组合，加载图像
     // 并将其绘制在指定位置。
     for (_, (position, renderable)) in rendering_data.iter() {
         // 加载图像
-        let image = get_image(context, renderable, time.delta);
+        let image_path = get_image(context, renderable, time.delta);
         let x = position.x as f32 * TILE_WIDTH;
         let y = position.y as f32 * TILE_WIDTH;
+        let z = position.z;
 
         // 画
         let draw_params = DrawParam::new().dest(Vec2::new(x, y));
-        canvas.draw(&image, draw_params);
+        rendering_batches
+            .entry(z)
+            .or_default()
+            .entry(image_path)
+            .or_default()
+            .push(draw_params);
     }
+    // ANCHOR_END: rendering_batches
+
+    // ANCHOR: rendering_batches_2
+    for (_z, group) in rendering_batches
+        .iter()
+        .sorted_by(|a, b| Ord::cmp(&a.0, &b.0))
+    {
+        for (iamge_path, draw_params) in group {
+            let image = Image::from_path(context, iamge_path).unwrap();
+            let mut mesh_batch = graphics::InstanceArray::new(context, Some(image));
+
+            for draw_param in draw_params.iter() {
+                mesh_batch.push(*draw_param);
+            }
+            canvas.draw(&mesh_batch, graphics::DrawParam::new());
+        }
+    }
+    // ANCHOR_END: rendering_batches_2
 
     // ANCHOR: draw_gameplay_state
     // 渲染任何文字
@@ -49,6 +73,10 @@ let time = query.iter().next().unwrap().1;
     draw_text(&mut canvas, &gameplay.state.to_string(), 525.0, 80.0);
     draw_text(&mut canvas, &gameplay.moves_count.to_string(), 525.0, 100.0);
     // ANCHOR_END: draw_gameplay_state
+
+    // 渲染 FPS
+    let fps = format!("FPS: {:.0}", context.time.fps());
+    draw_text(&mut canvas, &fps, 525.0, 120.0);
 
     // 最后，呈现画布；这会将所有内容实际显示在屏幕上。
     canvas.finish(context).expect("expected to present");
@@ -66,7 +94,9 @@ pub fn draw_text(canvas: &mut Canvas, text_string: &str, x: f32, y: f32) {
 }
 // ANCHOR_END: draw_text
 
-pub fn get_image(context: &mut Context, renderable: &Renderable, delta: Duration) -> Image {
+// 实现批量渲染。之前使用的get_image函数不再适用
+#[allow(unused_variables)]
+pub fn get_image(context: &mut Context, renderable: &Renderable, delta: Duration) -> String {
     let path_index = match renderable.kind() {
         Renderablekind::Static => {
             // 我们只有一张图片，所以直接返回它
@@ -81,6 +111,5 @@ pub fn get_image(context: &mut Context, renderable: &Renderable, delta: Duration
             ((delta.as_micros() / FRAME_DURATION_MS) % 4) as usize
         }
     };
-    let image_path = renderable.path(path_index);
-    Image::from_path(context, image_path).unwrap()
+    renderable.path(path_index)
 }
